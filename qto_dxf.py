@@ -14,11 +14,19 @@ import os
 import math
 import csv
 from collections import defaultdict
+from typing import Sequence, Tuple, Union
 
-def distance_2d(p1, p2):
+Point2D = Union[Tuple[float, float], Sequence[float]]
+
+try:
+    import ezdxf
+except ImportError:
+    ezdxf = None
+
+def distance_2d(p1: Point2D, p2: Point2D) -> float:
     return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
 
-def polygon_area(points):
+def polygon_area(points: Sequence[Point2D]) -> float:
     """حساب مساحة مضلع ثنائي الأبعاد باستخدام صيغة Shoelace"""
     if len(points) < 3:
         return 0.0
@@ -30,10 +38,8 @@ def polygon_area(points):
         area -= points[j][0] * points[i][1]
     return abs(area) / 2.0
 
-def process_dxf(filepath):
-    try:
-        import ezdxf
-    except ImportError:
+def process_dxf(filepath: str):
+    if ezdxf is None:
         print("[!] مكتبة ezdxf غير مثبتة. يمكنك تثبيتها عبر: pip install ezdxf")
         return None
 

@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.6 (PickFirst Support & Selection Safety Fix)
+;;;  Version: 1.7 (Engineering BOQ & Multi-Sheet Metraj Excel Engine)
 ;;;  Commands:
 ;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR        - اختصار لنفس الأداة
@@ -11,7 +11,7 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.6")
+(setq *qto-version* "1.7")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -471,137 +471,195 @@
 )
 
 ;;; --------------------------------------------------------------------------
-;;; دالة التصدير المباشر لملف Excel احترافي مع دعم كامل للغة العربية 100%
+;;; دالة التصدير المباشر لملف Excel احترافي متعدد الشيتات مطابق للمقايسات الهندسية
+;;; يحتوي على: 1. المقايسة التقديرية والتكاليف  2. دفتر حصر الأطوال والمساحات  3. حصر الأبواب والشبابيك
 ;;; --------------------------------------------------------------------------
-(defun qto:export-to-excel ( / dwg-path dwg-name default-xls default-xlsx filepath f date-str xl wb)
+(defun qto:export-to-excel ( / dwg-path dwg-name default-xls default-xlsx filepath f date-str xl wb
+                               c-idx m-idx b-idx tot-cost tot-blocks item)
   (setq dwg-path (getvar "DWGPREFIX"))
   (setq dwg-name (vl-filename-base (getvar "DWGNAME")))
   (if (or (null dwg-path) (= dwg-path "")) (setq dwg-path "C:\\"))
   (if (or (null dwg-name) (= dwg-name "")) (setq dwg-name "Drawing"))
-  (setq default-xls (strcat dwg-path dwg-name "_حصر_الكميات.xls"))
+  (setq default-xls (strcat dwg-path dwg-name "_حصر_الكميات_والمقايسة.xls"))
 
-  (setq filepath (getfiled "حفظ تقرير حصر الكميات بصيغة Excel" default-xls "xls" 1))
+  (setq filepath (getfiled "حفظ تقرير المقايسة وحصر الكميات بصيغة Excel" default-xls "xls" 1))
   (if filepath
     (progn
       (setq f (open filepath "w"))
       (if f
         (progn
-          ;; 1. كتابة UTF-8 BOM
           (qto:write-utf8-bom f)
-
           (setq date-str (vl-catch-all-apply 'menucmd (list "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM)")))
           (if (vl-catch-all-error-p date-str) (setq date-str "N/A"))
 
-          ;; 2. كتابة ترويسة HTML Excel مع اتجاه اليمين لليسار RTL وتنسيق أنيق
-          (qto:write-line-crlf "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">" f)
-          (qto:write-line-crlf "<head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">" f)
-          (qto:write-line-crlf "<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>" f)
-          (qto:write-line-crlf "<x:Name>QTO</x:Name><x:WorksheetOptions><x:DisplayRightToLeft/><x:Selected/></x:WorksheetOptions>" f)
-          (qto:write-line-crlf "</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->" f)
-          (qto:write-line-crlf "<style>" f)
-          (qto:write-line-crlf "body { font-family: Segoe UI, Tahoma, Arial, sans-serif; direction: rtl; }" f)
-          (qto:write-line-crlf "table { border-collapse: collapse; width: 100%; margin-top: 15px; }" f)
-          (qto:write-line-crlf "th { background-color: #107C41; color: #ffffff; font-weight: bold; font-size: 11pt; padding: 10px; border: 1px solid #0D6535; text-align: center; }" f)
-          (qto:write-line-crlf "td { padding: 8px 12px; border: 1px solid #d4d4d4; font-size: 10pt; text-align: right; }" f)
-          (qto:write-line-crlf ".center { text-align: center; font-weight: bold; }" f)
-          (qto:write-line-crlf ".sec { background-color: #E8F5E9; color: #1B5E20; font-weight: bold; font-size: 11pt; padding: 8px; border: 1px solid #C8E6C9; }" f)
-          (qto:write-line-crlf ".title { font-size: 16pt; font-weight: bold; color: #107C41; padding: 5px 0; }" f)
-          (qto:write-line-crlf ".info { font-size: 10.5pt; color: #444444; }" f)
-          (qto:write-line-crlf "</style></head><body>" f)
+          ;; ترويسة ملف XML SpreadsheetML
+          (qto:write-line-crlf "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" f)
+          (qto:write-line-crlf "<?mso-application progid=\"Excel.Sheet\"?>" f)
+          (qto:write-line-crlf "<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\" xmlns:html=\"http://www.w3.org/TR/REC-html40\">" f)
 
-          ;; العنوان والمعلومات
-          (qto:write-utf8-escaped "<div class=\"title\">" f)
-          (qto:txt-hdr-title f)
-          (qto:write-line-crlf "</div>" f)
+          ;; أنماط وتنسيقات الخلايا
+          (qto:write-line-crlf " <Styles>" f)
+          (qto:write-line-crlf "  <Style ss:ID=\"Default\" ss:Name=\"Normal\"><Alignment ss:Vertical=\"Center\"/><Font ss:FontName=\"Segoe UI\" ss:Size=\"10\"/></Style>" f)
+          (qto:write-line-crlf "  <Style ss:ID=\"Header\"><Alignment ss:Horizontal=\"Center\" ss:Vertical=\"Center\" ss:WrapText=\"1\"/><Borders><Border ss:Position=\"Bottom\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#0D6535\"/><Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#0D6535\"/><Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#0D6535\"/><Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#0D6535\"/></Borders><Font ss:FontName=\"Segoe UI\" ss:Size=\"10\" ss:Color=\"#FFFFFF\" ss:Bold=\"1\"/><Interior ss:Color=\"#107C41\" ss:Pattern=\"Solid\"/></Style>" f)
+          (qto:write-line-crlf "  <Style ss:ID=\"CellCenter\"><Alignment ss:Horizontal=\"Center\" ss:Vertical=\"Center\"/><Borders><Border ss:Position=\"Bottom\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/></Borders></Style>" f)
+          (qto:write-line-crlf "  <Style ss:ID=\"CellRight\"><Alignment ss:Horizontal=\"Right\" ss:Vertical=\"Center\"/><Borders><Border ss:Position=\"Bottom\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/><Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#D4D4D4\"/></Borders></Style>" f)
+          (qto:write-line-crlf "  <Style ss:ID=\"TotalRow\"><Alignment ss:Horizontal=\"Center\" ss:Vertical=\"Center\"/><Borders><Border ss:Position=\"Bottom\" ss:LineStyle=\"Double\" ss:Weight=\"3\" ss:Color=\"#107C41\"/><Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#107C41\"/><Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#107C41\"/><Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\" ss:Color=\"#107C41\"/></Borders><Font ss:FontName=\"Segoe UI\" ss:Size=\"11\" ss:Bold=\"1\" ss:Color=\"#107C41\"/><Interior ss:Color=\"#E8F5E9\" ss:Pattern=\"Solid\"/></Style>" f)
+          (qto:write-line-crlf " </Styles>" f)
 
-          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Drawing:</strong> " (getvar "DWGNAME") "</div>") f)
-          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Date:</strong> " date-str "</div>") f)
-          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Version:</strong> v" *qto-version* "</div>") f)
+          ;; 1. الورقة الأولى: المقايسة التقديرية والتكاليف (BOQ & Cost Estimate)
+          (qto:write-line-crlf " <Worksheet ss:Name=\"المقايسة_التقديرية_والتكاليف\">" f)
+          (qto:write-line-crlf "  <Table ss:DefaultRowHeight=\"22\">" f)
+          (qto:write-line-crlf "   <Column ss:Width=\"50\"/><Column ss:Width=\"120\"/><Column ss:Width=\"260\"/><Column ss:Width=\"80\"/><Column ss:Width=\"90\"/><Column ss:Width=\"100\"/><Column ss:Width=\"110\"/>" f)
+          (qto:write-line-crlf "   <Row ss:Height=\"28\">" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Sıra No (م)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">İş Kalemi No (كود البند)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">İş Kaleminin Adı ve Açıklaması (بيان الأعمال)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Ölçü Birimi (الوحدة)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Miktar (الكمية)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Birim Fiyat TL (سعر الوحدة)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Tutar TL (الإجمالي)</Data></Cell>" f)
+          (qto:write-line-crlf "   </Row>" f)
 
-          ;; بداية الجدول وعناوين الأعمدة
-          (qto:write-line-crlf "<table><thead><tr>" f)
-          (qto:write-utf8-escaped "<th style=\"width:15%;\">" f)
-          (qto:txt-col-cat f)
-          (qto:write-line-crlf "</th>" f)
-
-          (qto:write-utf8-escaped "<th style=\"width:45%;\">" f)
-          (qto:txt-col-desc f)
-          (qto:write-line-crlf "</th>" f)
-
-          (qto:write-utf8-escaped "<th style=\"width:20%;\">" f)
-          (qto:txt-col-qty f)
-          (qto:write-line-crlf "</th>" f)
-
-          (qto:write-utf8-escaped "<th style=\"width:20%;\">" f)
-          (qto:txt-col-unit f)
-          (qto:write-line-crlf "</th></tr></thead><tbody>" f)
-
-          ;; 1. الأطوال
+          (setq c-idx 1)
           (if *qto-lengths*
-            (progn
-              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
-              (qto:txt-sec-len f)
-              (qto:write-line-crlf "</td></tr>" f)
-              (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
-                (qto:write-utf8-escaped "<tr><td>" f)
-                (qto:txt-cat-len f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:write-utf8-escaped (car item) f)
-                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
-                (qto:write-utf8-escaped (rtos (cdr item) 2 3) f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:txt-unit-m f)
-                (qto:write-line-crlf "</td></tr>" f)
-              )
+            (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa c-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">15.120." (itoa (+ 1000 c-idx)) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">أعمال مسارات وأطوال - طبقة " (car item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">م.ط</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=RC[-2]*RC[-1]\"><Data ss:Type=\"Number\">0</Data></Cell></Row>") f)
+              (setq c-idx (1+ c-idx))
             )
           )
 
-          ;; 2. المساحات
           (if *qto-areas*
-            (progn
-              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
-              (qto:txt-sec-area f)
-              (qto:write-line-crlf "</td></tr>" f)
-              (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
-                (qto:write-utf8-escaped "<tr><td>" f)
-                (qto:txt-cat-area f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:write-utf8-escaped (car item) f)
-                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
-                (qto:write-utf8-escaped (rtos (cdr item) 2 3) f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:txt-unit-m2 f)
-                (qto:write-line-crlf "</td></tr>" f)
-              )
+            (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa c-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">15.220." (itoa (+ 1000 c-idx)) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">أعمال مساحات وتشطيبات - طبقة " (car item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">م²</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=RC[-2]*RC[-1]\"><Data ss:Type=\"Number\">0</Data></Cell></Row>") f)
+              (setq c-idx (1+ c-idx))
             )
           )
 
-          ;; 3. البلوكات
           (if *qto-blocks*
-            (progn
-              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
-              (qto:txt-sec-blk f)
-              (qto:write-line-crlf "</td></tr>" f)
-              (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
-                (qto:write-utf8-escaped "<tr><td>" f)
-                (qto:txt-cat-blk f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:write-utf8-escaped (strcat (caar item) " [" (cdar item) "]") f)
-                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
-                (qto:write-utf8-escaped (itoa (fix (cdr item))) f)
-                (qto:write-utf8-escaped "</td><td>" f)
-                (qto:txt-unit-pcs f)
-                (qto:write-line-crlf "</td></tr>" f)
-              )
+            (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa c-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">15.350." (itoa (+ 1000 c-idx)) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">توريد وتركيب " (caar item) " [" (cdar item) "]</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">عدد</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa (fix (cdr item))) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=RC[-2]*RC[-1]\"><Data ss:Type=\"Number\">0</Data></Cell></Row>") f)
+              (setq c-idx (1+ c-idx))
             )
           )
 
-          (qto:write-line-crlf "</tbody></table></body></html>" f)
+          (setq tot-cost (1- c-idx))
+          (if (> tot-cost 0)
+            (qto:write-line-crlf (strcat "   <Row ss:Height=\"25\"><Cell ss:MergeAcross=\"5\" ss:StyleID=\"TotalRow\"><Data ss:Type=\"String\">المجموع الكلي التقديري للمشروع (TOPLAM TUTAR):</Data></Cell>"
+                                         "<Cell ss:StyleID=\"TotalRow\" ss:Formula=\"=SUM(R[-" (itoa tot-cost) "]C:R[-1]C)\"><Data ss:Type=\"Number\">0</Data></Cell></Row>") f)
+          )
+          (qto:write-line-crlf "  </Table>" f)
+          (qto:write-line-crlf "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\"><DisplayRightToLeft/></WorksheetOptions>" f)
+          (qto:write-line-crlf " </Worksheet>" f)
+
+          ;; 2. الورقة الثانية: دفتر حصر الأطوال والمساحات (Detailed Takeoff)
+          (qto:write-line-crlf " <Worksheet ss:Name=\"دفتر_حصر_الأطوال_والمساحات\">" f)
+          (qto:write-line-crlf "  <Table ss:DefaultRowHeight=\"20\">" f)
+          (qto:write-line-crlf "   <Column ss:Width=\"50\"/><Column ss:Width=\"200\"/><Column ss:Width=\"120\"/><Column ss:Width=\"80\"/><Column ss:Width=\"100\"/><Column ss:Width=\"80\"/><Column ss:Width=\"100\"/><Column ss:Width=\"80\"/>" f)
+          (qto:write-line-crlf "   <Row ss:Height=\"28\">" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">NO (م)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">İşin Açıklanması / Layer (بيان العنصر / الطبقة)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Kategori (نوع الحصر)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Benzer (المتشابه)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Boy / Alan (المقاس)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">MİNHA (الخصم)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">TOPLAM (الإجمالي)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Birim (الوحدة)</Data></Cell>" f)
+          (qto:write-line-crlf "   </Row>" f)
+
+          (setq m-idx 1)
+          (if *qto-lengths*
+            (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa m-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">" (car item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">أطوال (Linear)</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">1</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=(RC[-3]*RC[-2])-RC[-1]\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">م.ط</Data></Cell></Row>") f)
+              (setq m-idx (1+ m-idx))
+            )
+          )
+
+          (if *qto-areas*
+            (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa m-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">" (car item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">مساحات (Area)</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">1</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=(RC[-3]*RC[-2])-RC[-1]\"><Data ss:Type=\"Number\">" (rtos (cdr item) 2 3) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">م²</Data></Cell></Row>") f)
+              (setq m-idx (1+ m-idx))
+            )
+          )
+          (qto:write-line-crlf "  </Table>" f)
+          (qto:write-line-crlf "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\"><DisplayRightToLeft/></WorksheetOptions>" f)
+          (qto:write-line-crlf " </Worksheet>" f)
+
+          ;; 3. الورقة الثالثة: حصر الأبواب والشبابيك والبلوكات (KAPI, PENCERE VE BLOKLAR)
+          (qto:write-line-crlf " <Worksheet ss:Name=\"حصر_الأبواب_والشبابيك\">" f)
+          (qto:write-line-crlf "  <Table ss:DefaultRowHeight=\"20\">" f)
+          (qto:write-line-crlf "   <Column ss:Width=\"50\"/><Column ss:Width=\"180\"/><Column ss:Width=\"150\"/><Column ss:Width=\"80\"/><Column ss:Width=\"90\"/><Column ss:Width=\"100\"/><Column ss:Width=\"80\"/>" f)
+          (qto:write-line-crlf "   <Row ss:Height=\"28\">" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">NO (م)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">İşin Açıklanması / Blok (اسم البلوك / الرمز)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Layer (الطبقة)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Benzer (المتشابه)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Adet (العدد المحصور)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">TOPLAM (الإجمالي)</Data></Cell>" f)
+          (qto:write-line-crlf "    <Cell ss:StyleID=\"Header\"><Data ss:Type=\"String\">Birim (الوحدة)</Data></Cell>" f)
+          (qto:write-line-crlf "   </Row>" f)
+
+          (setq b-idx 1)
+          (if *qto-blocks*
+            (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
+              (qto:write-line-crlf (strcat "   <Row><Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa b-idx) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellRight\"><Data ss:Type=\"String\">" (caar item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">" (cdar item) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">1</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"Number\">" (itoa (fix (cdr item))) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\" ss:Formula=\"=RC[-2]*RC[-1]\"><Data ss:Type=\"Number\">" (itoa (fix (cdr item))) "</Data></Cell>"
+                                           "<Cell ss:StyleID=\"CellCenter\"><Data ss:Type=\"String\">عدد (adet)</Data></Cell></Row>") f)
+              (setq b-idx (1+ b-idx))
+            )
+          )
+
+          (setq tot-blocks (1- b-idx))
+          (if (> tot-blocks 0)
+            (qto:write-line-crlf (strcat "   <Row ss:Height=\"25\"><Cell ss:MergeAcross=\"4\" ss:StyleID=\"TotalRow\"><Data ss:Type=\"String\">إجمالي عدد البلوكات (TOPLAM ADET):</Data></Cell>"
+                                         "<Cell ss:StyleID=\"TotalRow\" ss:Formula=\"=SUM(R[-" (itoa tot-blocks) "]C:R[-1]C)\"><Data ss:Type=\"Number\">0</Data></Cell>"
+                                         "<Cell ss:StyleID=\"TotalRow\"><Data ss:Type=\"String\">عدد</Data></Cell></Row>") f)
+          )
+          (qto:write-line-crlf "  </Table>" f)
+          (qto:write-line-crlf "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\"><DisplayRightToLeft/></WorksheetOptions>" f)
+          (qto:write-line-crlf " </Worksheet>" f)
+
+          (qto:write-line-crlf "</Workbook>" f)
           (close f)
 
-          (princ (strcat "\n[✓] تم إنشاء وتصدير ملف Excel بنجاح: " filepath))
+          (princ (strcat "\n[✓] تم إنشاء وتصدير ملف Excel متعدد الشيتات بنجاح: " filepath))
 
-          ;; تشغيل Excel وفتح الملف أمامه مباشرة
+          ;; تشغيل Excel وفتح الملف أمامه وحفظه بصيغة .xlsx الحقيقية
           (setq xl (vl-catch-all-apply 'vlax-get-or-create-object (list "Excel.Application")))
           (if (and xl (not (vl-catch-all-error-p xl)))
             (progn
@@ -617,14 +675,18 @@
             (startapp "explorer.exe" filepath)
           )
 
-          (alert (strcat "تم بنجاح تصدير تقرير الكميات إلى Excel!\n\n"
-                         "المسار:\n" filepath "\n\n"
-                         "تم فتح الملف في Excel وهو جاهز ومنسق بالكامل."))
+          (alert (strcat "تم بنجاح تصدير تقرير المقايسة التقديرية وحصر الكميات إلى Excel!\n\n"
+                         "الملف يحتوي على 3 أوراق عمل (Sheets) مطابقة لدفاتر الحصر والمقايسات الهندسية:\n"
+                         "1. المقايسة التقديرية والتكاليف (BOQ & Cost Estimate)\n"
+                         "2. دفتر حصر الأطوال والمساحات (Detailed Takeoff)\n"
+                         "3. حصر الأبواب والشبابيك والبلوكات (Block Counts)\n\n"
+                         "المسار:\n" filepath))
         )
         (alert "تعذر فتح الملف للكتابة!")
       )
     )
   )
+  (princ)
 )
 
 ;;; --------------------------------------------------------------------------

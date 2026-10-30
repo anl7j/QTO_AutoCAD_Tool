@@ -1,0 +1,8 @@
+{
+  "python.defaultInterpreterPath": "/opt/homebrew/bin/python3",
+  "python.analysis.extraPaths": [
+    "/Users/anl7j/Library/Python/3.13/lib/python/site-packages",
+    "/Users/anl7j/Library/Python/3.9/lib/python/site-packages"
+  ]
+}
+
