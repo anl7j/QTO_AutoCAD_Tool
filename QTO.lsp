@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.1
+;;;  Version: 1.2 (Excel Arabic Encoding & Column Separator Fix)
 ;;;  Commands:
 ;;;    QTO        - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR       - اختصار لنفس الأداة
@@ -10,13 +10,85 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.1")
+(setq *qto-version* "1.2")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
 ;;; --------------------------------------------------------------------------
 (defun qto:numberp (x)
   (and x (or (= (type x) 'REAL) (= (type x) 'INT)))
+)
+
+;;; --------------------------------------------------------------------------
+;;; دوال معالجة وفك تشفير يونيكود AutoCAD (\U+XXXX) وكتابتها كـ UTF-8 حقيقي في Excel
+;;; --------------------------------------------------------------------------
+
+;; تحويل 4 خانات Hex إلى كود صحيح
+(defun qto:hex4->int (h / i val c digits pos)
+  (setq digits "0123456789ABCDEF")
+  (setq val 0)
+  (setq i 1)
+  (setq h (strcase h))
+  (while (<= i 4)
+    (setq c (substr h i 1))
+    (setq pos (vl-string-search c digits))
+    (if pos
+      (setq val (+ (* val 16) pos))
+    )
+    (setq i (1+ i))
+  )
+  val
+)
+
+;; كتابة Code Point كـ بايتات UTF-8 حقيقية
+(defun qto:write-code-point (code f / b1 b2 b3)
+  (cond
+    ((< code 128)
+     (write-char code f))
+    ((< code 2048)
+     (setq b1 (+ 192 (/ code 64)))
+     (setq b2 (+ 128 (rem code 64)))
+     (write-char b1 f)
+     (write-char b2 f))
+    (t
+     (setq b1 (+ 224 (/ code 4096)))
+     (setq b2 (+ 128 (rem (/ code 64) 64)))
+     (setq b3 (+ 128 (rem code 64)))
+     (write-char b1 f)
+     (write-char b2 f)
+     (write-char b3 f))
+  )
+)
+
+;; كتابة سطر كامل بترميز UTF-8 مع فك أي رموز \U+XXXX تلقائياً
+(defun qto:write-utf8-line (str f / len i hex code)
+  (setq len (strlen str))
+  (setq i 1)
+  (while (<= i len)
+    (if (and (<= (+ i 6) len)
+             (= (strcase (substr str i 3)) "\\U+"))
+      (progn
+        (setq hex (substr str (+ i 3) 4))
+        (setq code (qto:hex4->int hex))
+        (qto:write-code-point code f)
+        (setq i (+ i 7))
+      )
+      (progn
+        (write-char (ascii (substr str i 1)) f)
+        (setq i (1+ i))
+      )
+    )
+  )
+  ;; كتابة نهاية السطر CRLF
+  (write-char 13 f)
+  (write-char 10 f)
+)
+
+;; كتابة علامة البداية UTF-8 BOM
+(defun qto:write-utf8-bom (file-handle)
+  (write-char 239 file-handle)
+  (write-char 187 file-handle)
+  (write-char 191 file-handle)
 )
 
 ;;; --------------------------------------------------------------------------
@@ -83,6 +155,7 @@
                     (setq f (open local-path "w"))
                     (if f
                       (progn
+                        ;; نكتب الكود كما ورد من جيت هاب
                         (write-line new-code f)
                         (close f)
                         (load local-path)
@@ -113,15 +186,6 @@
 )
 
 (defun c:HASR-UPDATE () (c:QTO-UPDATE))
-
-;;; --------------------------------------------------------------------------
-;;; دالة كتابة رأس ملف CSV مع علامة UTF-8 BOM لدعم اللغة العربية في Excel
-;;; --------------------------------------------------------------------------
-(defun qto:write-utf8-bom (file-handle)
-  (write-char 239 file-handle)
-  (write-char 187 file-handle)
-  (write-char 191 file-handle)
-)
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة جلب الاسم الحقيقي للبلوك (حتى لو كان بلوك ديناميكي Dynamic Block)
@@ -349,7 +413,7 @@
 )
 
 ;;; --------------------------------------------------------------------------
-;;; دالة تصدير النتائج إلى ملف CSV مهيأ للإكسل بترميز UTF-8
+;;; دالة تصدير النتائج إلى ملف CSV مهيأ للإكسل بترميز UTF-8 وفواصل أعمدة صحيحة
 ;;; --------------------------------------------------------------------------
 (defun qto:export-to-csv ( / dwg-path dwg-name default-csv filepath f date-str)
   (setq dwg-path (getvar "DWGPREFIX"))
@@ -369,49 +433,52 @@
       (setq f (open filepath "w"))
       (if f
         (progn
-          ;; كتابة BOM لفتح الملف باللغة العربية في إكسل بدون رموز غريبة
+          ;; 1. كتابة علامة UTF-8 BOM
           (qto:write-utf8-bom f)
+
+          ;; 2. تحديد الفاصلة لإكسل ليقوم بتقسيم الأعمدة تلقائياً (sep=,)
+          (qto:write-utf8-line "sep=," f)
 
           (setq date-str (vl-catch-all-apply 'menucmd (list "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM)")))
           (if (vl-catch-all-error-p date-str) (setq date-str "N/A"))
 
-          ;; ترويسة الملف
-          (write-line "تقرير حصر الكميات - AutoCAD Quantity Takeoff Report" f)
-          (write-line (strcat "المخطط: ," (getvar "DWGNAME")) f)
-          (write-line (strcat "التاريخ: ," date-str) f)
-          (write-line (strcat "الإصدار: ,v" *qto-version*) f)
-          (write-line "" f)
+          ;; 3. ترويسة ومعلومات المخطط
+          (qto:write-utf8-line "تقرير حصر الكميات - AutoCAD Quantity Takeoff Report" f)
+          (qto:write-utf8-line (strcat "\"المخطط:\",\"" (getvar "DWGNAME") "\"") f)
+          (qto:write-utf8-line (strcat "\"التاريخ:\",\"" date-str "\"") f)
+          (qto:write-utf8-line (strcat "\"الإصدار:\",\"v" *qto-version* "\"") f)
+          (qto:write-utf8-line "" f)
 
-          ;; جدول الأطوال
-          (write-line "--- [1] حصر الأطوال (Linear Takeoff) ---" f)
-          (write-line "نوع الحصر,اسم الطبقة (Layer),الكمية الإجمالية,الوحدة المقدرة" f)
+          ;; 4. جدول الأطوال
+          (qto:write-utf8-line "--- [1] حصر الأطوال (Linear Takeoff) ---" f)
+          (qto:write-utf8-line "\"النوع\",\"اسم الطبقة (Layer)\",\"الكمية الإجمالية\",\"الوحدة\"" f)
           (if *qto-lengths*
             (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
-              (write-line (strcat "أطوال," (car item) "," (rtos (cdr item) 2 3) ",متر طولي / وحدة") f)
+              (qto:write-utf8-line (strcat "\"أطوال\",\"" (car item) "\",\"" (rtos (cdr item) 2 3) "\",\"متر طولي (م.ط)\"") f)
             )
-            (write-line "أطوال,لا يوجد,0,-" f)
+            (qto:write-utf8-line "\"أطوال\",\"لا يوجد\",\"0\",\"-\"" f)
           )
-          (write-line "" f)
+          (qto:write-utf8-line "" f)
 
-          ;; جدول المساحات
-          (write-line "--- [2] حصر المساحات (Area Takeoff) ---" f)
-          (write-line "نوع الحصر,اسم الطبقة (Layer),المساحة الإجمالية,الوحدة المقدرة" f)
+          ;; 5. جدول المساحات
+          (qto:write-utf8-line "--- [2] حصر المساحات (Area Takeoff) ---" f)
+          (qto:write-utf8-line "\"النوع\",\"اسم الطبقة (Layer)\",\"المساحة الإجمالية\",\"الوحدة\"" f)
           (if *qto-areas*
             (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
-              (write-line (strcat "مساحات," (car item) "," (rtos (cdr item) 2 3) ",متر مربع / وحدة²") f)
+              (qto:write-utf8-line (strcat "\"مساحات\",\"" (car item) "\",\"" (rtos (cdr item) 2 3) "\",\"متر مربع (م²)\"") f)
             )
-            (write-line "مساحات,لا يوجد,0,-" f)
+            (qto:write-utf8-line "\"مساحات\",\"لا يوجد\",\"0\",\"-\"" f)
           )
-          (write-line "" f)
+          (qto:write-utf8-line "" f)
 
-          ;; جدول البلوكات
-          (write-line "--- [3] حصر البلوكات والعناصر (Block Counts) ---" f)
-          (write-line "نوع الحصر,اسم البلوك (Block Name),الطبقة (Layer),العدد,الوحدة" f)
+          ;; 6. جدول البلوكات
+          (qto:write-utf8-line "--- [3] حصر البلوكات والعناصر (Block Counts) ---" f)
+          (qto:write-utf8-line "\"النوع\",\"اسم البلوك (Block Name)\",\"الطبقة (Layer)\",\"العدد\",\"الوحدة\"" f)
           (if *qto-blocks*
             (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
-              (write-line (strcat "بلوكات," (caar item) "," (cdar item) "," (itoa (fix (cdr item))) ",عدد") f)
+              (qto:write-utf8-line (strcat "\"بلوكات\",\"" (caar item) "\",\"" (cdar item) "\",\"" (itoa (fix (cdr item))) "\",\"عدد\"") f)
             )
-            (write-line "بلوكات,لا يوجد,-,0,عدد" f)
+            (qto:write-utf8-line "\"بلوكات\",\"لا يوجد\",\"-\",\"0\",\"عدد\"" f)
           )
 
           (close f)
