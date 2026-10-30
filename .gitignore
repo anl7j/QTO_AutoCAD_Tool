@@ -12,5 +12,7 @@ __pycache__/
 *.dwl2
 *.log
 
-# Output Reports
+# Output Reports & Excel
 *_حصر_الكميات.csv
+*.xls
+*.xlsx

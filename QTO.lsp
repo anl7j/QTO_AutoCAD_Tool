@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.5 (Direct Mouse Selection & Pure UTF-8 Arabic Excel Fix)
+;;;  Version: 1.6 (PickFirst Support & Selection Safety Fix)
 ;;;  Commands:
 ;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR        - اختصار لنفس الأداة
@@ -11,7 +11,7 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.5")
+(setq *qto-version* "1.6")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -706,22 +706,40 @@
 
 ;;; --------------------------------------------------------------------------
 ;;; الأمر الأساسي: QTO (أو HASR)
-;;; يدعم الآن التحديد التفاعلي بالماوس مباشرة كما في أوامر أوتوكاد الأصلية!
+;;; يدعم الآن التحديد المسبق (Pickfirst) والتحديد التفاعلي بالماوس، مع حماية ضد الحصر الشامل غير المقصود
 ;;; --------------------------------------------------------------------------
-(defun c:QTO ( / ss exp-opt)
+(defun c:QTO ( / ss exp-opt all-opt)
   (setvar "CMDECHO" 0)
   (princ "\n=======================================================")
   (princ (strcat "\n  أداة حصر الكميات لأوتوكاد (v" *qto-version* ") "))
   (princ "\n=======================================================")
 
-  ;; التحديد التفاعلي المباشر بالماوس
-  (princ "\nحدد العناصر أو الغرفة بالماوس لحصرها، أو اضغط [Enter] لحصر كامل المخطط: ")
-  (setq ss (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+  ;; 1. التحقق أولاً من وجود عناصر محددة مسبقاً بالماوس (Pickfirst / Pre-selection)
+  (setq ss (ssget "_I" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+  (if (and ss (> (sslength ss) 0))
+    (progn
+      (sssetfirst nil nil) ; إلغاء التحديد المسبق لإيقاف الـ Grips
+      (princ (strcat "\n[✓] تم التقاط العناصر المحددة مسبقاً (" (itoa (sslength ss)) " عنصراً)."))
+    )
+    ;; 2. إذا لم يكن هناك تحديد مسبق، نطلب من المستخدم التحديد بالماوس الآن
+    (progn
+      (princ "\nحدد العناصر أو الغرفة بالماوس لحصرها ثم اضغط [Enter]: ")
+      (setq ss (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+    )
+  )
 
+  ;; 3. إذا لم يقم المستخدم بتحديد عناصر وضغط Enter مباشرة
   (if (null ss)
     (progn
-      (princ "\nلم تقم بتحديد عناصر، جاري حصر كامل المخطط أوتوماتيكياً ...")
-      (setq ss (ssget "X" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+      (initget "Yes No نعم لا")
+      (setq all-opt (getkword "\nلم تقم بتحديد عناصر بالماوس. هل ترغب فعلاً في حصر كامل عناصر المخطط؟ [نعم(Yes)/لا(No)] <لا>: "))
+      (if (or (= all-opt "Yes") (= all-opt "نعم"))
+        (progn
+          (princ "\nجاري حصر كامل عناصر المخطط أوتوماتيكياً ...")
+          (setq ss (ssget "X" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+        )
+        (princ "\n[i] تم إلغاء العملية، لم يتم اختيار أي عناصر.")
+      )
     )
     (princ (strcat "\nتم تحديد " (itoa (sslength ss)) " عنصراً للحصر."))
   )
