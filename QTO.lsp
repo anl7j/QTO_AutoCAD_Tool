@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.8 (Bulletproof Arabic Excel Export & Engineering BOQ Engine)
+;;;  Version: 1.9 (Native HTML Spreadsheet & Arabic BOQ Fix)
 ;;;  Commands:
 ;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR        - اختصار لنفس الأداة
@@ -11,7 +11,7 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.8")
+(setq *qto-version* "1.9")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -128,13 +128,9 @@
       )
       (progn
         (setq c-ascii (ascii (substr str i 1)))
-        (cond
-          ((= c-ascii 38) (princ "&amp;" f))
-          ((= c-ascii 60) (princ "&lt;" f))
-          ((= c-ascii 62) (princ "&gt;" f))
-          ((= c-ascii 34) (princ "&quot;" f))
-          ((> c-ascii 127) (princ (strcat "&#" (itoa c-ascii) ";") f))
-          (t (write-char c-ascii f))
+        (if (> c-ascii 127)
+          (princ (strcat "&#" (itoa c-ascii) ";") f)
+          (write-char c-ascii f)
         )
         (setq i (1+ i))
       )
