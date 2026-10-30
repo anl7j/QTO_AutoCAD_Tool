@@ -1,12 +1,16 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.1 (Bugfix Release - Fixed FOUND definition & Enhanced Compatibility)
+;;;  Version: 1.1
 ;;;  Commands:
-;;;    QTO   - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
-;;;    HASR  - اختصار لنفس الأداة
+;;;    QTO        - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
+;;;    HASR       - اختصار لنفس الأداة
+;;;    QTO-UPDATE - التحديث التلقائي للإضافة مباشرة من GitHub
 ;;; ==========================================================================
 
 (vl-load-com)
+
+;;; رقم الإصدار الحالي
+(setq *qto-version* "1.1")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -14,6 +18,101 @@
 (defun qto:numberp (x)
   (and x (or (= (type x) 'REAL) (= (type x) 'INT)))
 )
+
+;;; --------------------------------------------------------------------------
+;;; دالة جلب محتوى رابط عبر الإنترنت (HTTP GET) لدعم التحديث التلقائي
+;;; --------------------------------------------------------------------------
+(defun qto:http-get (url / http res status)
+  (setq http (vlax-create-object "MSXML2.ServerXMLHTTP.6.0"))
+  (if (null http)
+    (setq http (vlax-create-object "MSXML2.XMLHTTP"))
+  )
+  (if (null http)
+    (setq http (vlax-create-object "WinHttp.WinHttpRequest.5.1"))
+  )
+  (if http
+    (progn
+      (vl-catch-all-apply
+        '(lambda ()
+           (vlax-invoke-method http 'open "GET" url :vlax-false)
+           (vlax-invoke-method http 'setRequestHeader "Cache-Control" "no-cache")
+           (vlax-invoke-method http 'setRequestHeader "Pragma" "no-cache")
+           (vlax-invoke-method http 'send)
+         )
+      )
+      (setq status (vl-catch-all-apply 'vlax-get-property (list http 'status)))
+      (if (and (qto:numberp status) (= status 200))
+        (setq res (vl-catch-all-apply 'vlax-get-property (list http 'responseText)))
+      )
+      (vlax-release-object http)
+    )
+  )
+  (if (and res (not (vl-catch-all-error-p res)) (= (type res) 'STR))
+    res
+    nil
+  )
+)
+
+;;; --------------------------------------------------------------------------
+;;; أمر التحديث التلقائي: QTO-UPDATE
+;;; --------------------------------------------------------------------------
+(defun c:QTO-UPDATE ( / local-path remote-ver new-code f ans)
+  (princ "\nجاري التحقق من وجود تحديثات جديدة عبر GitHub ...")
+  (setq remote-ver (qto:http-get "https://raw.githubusercontent.com/anl7j/QTO_AutoCAD_Tool/main/version.txt"))
+  (if remote-ver
+    (setq remote-ver (vl-string-trim " \t\r\n" remote-ver))
+  )
+  (if (and remote-ver (> (strlen remote-ver) 0))
+    (if (/= remote-ver *qto-version*)
+      (progn
+        (princ (strcat "\nتم العثور على إصدار جديد: v" remote-ver " (الإصدار الحالي: v" *qto-version* ")"))
+        (initget "Yes No نعم لا")
+        (setq ans (getkword (strcat "\nهل ترغب في تثبيت التحديث v" remote-ver " الآن؟ [نعم(Yes)/لا(No)] <نعم>: ")))
+        (if (or (= ans "Yes") (= ans "نعم") (null ans))
+          (progn
+            (setq local-path (findfile "QTO.lsp"))
+            (if (null local-path)
+              (setq local-path (getfiled "حدد مسار حفظ ملف QTO.lsp" "QTO.lsp" "lsp" 1))
+            )
+            (if local-path
+              (progn
+                (princ "\nجاري تحميل أحدث كود من GitHub ...")
+                (setq new-code (qto:http-get "https://raw.githubusercontent.com/anl7j/QTO_AutoCAD_Tool/main/QTO.lsp"))
+                (if (and new-code (> (strlen new-code) 100))
+                  (progn
+                    (setq f (open local-path "w"))
+                    (if f
+                      (progn
+                        (write-line new-code f)
+                        (close f)
+                        (load local-path)
+                        (princ (strcat "\n[✓] تم بنجاح تحديث الإضافة إلى الإصدار v" remote-ver " وتم إعادة تحميلها!"))
+                        (alert (strcat "تم بنجاح تحديث إضافة حصر الكميات إلى الإصدار v" remote-ver "!\nتم تطبيق التحديث فوراً في أوتوكاد."))
+                      )
+                      (alert "تعذر الكتابة على الملف. يرجى التأكد من صلاحيات المجلد.")
+                    )
+                  )
+                  (alert "تعذر تنزيل كود التحديث من GitHub. يرجى التحقق من اتصال الإنترنت.")
+                )
+              )
+            )
+          )
+        )
+      )
+      (progn
+        (princ (strcat "\nأنت تستخدم بالفعل أحدث إصدار (v" *qto-version* ")."))
+        (alert (strcat "أنت تستخدم بالفعل أحدث إصدار من الإضافة (v" *qto-version* ").\nلا توجد تحديثات جديدة حالياً."))
+      )
+    )
+    (progn
+      (princ "\nتعذر الاتصال بـ GitHub للتحقق من التحديثات.")
+      (alert "تعذر الاتصال بموقع GitHub للتحقق من التحديثات.\nيرجى التأكد من اتصال الإنترنت.")
+    )
+  )
+  (princ)
+)
+
+(defun c:HASR-UPDATE () (c:QTO-UPDATE))
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة كتابة رأس ملف CSV مع علامة UTF-8 BOM لدعم اللغة العربية في Excel
@@ -75,7 +174,7 @@
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة إضافة قيمة إلى قائمة التجميع التراكمي (Key-Value Accumulator)
-;;; متوافقة تماماً مع AutoLISP القياسي (بدون استخدام let)
+;;; متوافقة تماماً مع AutoLISP القياسي
 ;;; --------------------------------------------------------------------------
 (defun qto:accumulate (key val alist / found new-val)
   (setq found (assoc key alist))
@@ -194,7 +293,7 @@
 ;;; --------------------------------------------------------------------------
 (defun qto:print-summary ()
   (princ "\n==================================================================")
-  (princ "\n                    ملخص حصر الكميات للمخطط                      ")
+  (princ (strcat "\n        ملخص حصر الكميات للمخطط (الإصدار v" *qto-version* ")        "))
   (princ "\n==================================================================")
 
   ;; 1. الأطوال
@@ -280,6 +379,7 @@
           (write-line "تقرير حصر الكميات - AutoCAD Quantity Takeoff Report" f)
           (write-line (strcat "المخطط: ," (getvar "DWGNAME")) f)
           (write-line (strcat "التاريخ: ," date-str) f)
+          (write-line (strcat "الإصدار: ,v" *qto-version*) f)
           (write-line "" f)
 
           ;; جدول الأطوال
@@ -411,7 +511,7 @@
 (defun c:QTO ( / choice ss exp-opt)
   (setvar "CMDECHO" 0)
   (princ "\n=======================================================")
-  (princ "\n  أداة حصر الكميات لأوتوكاد (AutoCAD Quantity Takeoff) ")
+  (princ (strcat "\n  أداة حصر الكميات لأوتوكاد (v" *qto-version* ") "))
   (princ "\n=======================================================")
 
   (initget "All Selection كامل تحديد")
@@ -458,6 +558,6 @@
 (defun c:HASR () (c:QTO))
 (defun c:QTAKEOFF () (c:QTO))
 
-(princ "\n>> تم تحميل إضافة حصر الكميات بنجاح!")
-(princ "\n>> اكتب الأمر QTO أو HASR في شريط الأوامر لبدء الحصر.\n")
+(princ (strcat "\n>> تم تحميل إضافة حصر الكميات بنجاح (الإصدار v" *qto-version* ")!"))
+(princ "\n>> اكتب الأمر QTO أو HASR لبدء الحصر، أو QTO-UPDATE للتحقق من التحديثات.\n")
 (princ)
