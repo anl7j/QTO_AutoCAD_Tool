@@ -1,0 +1,16 @@
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+
+# AutoCAD Temp Files & Logs
+*.bak
+*.dwl
+*.dwl2
+*.log
+
+# Output Reports
+*_حصر_الكميات.csv
