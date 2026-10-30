@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.7 (Engineering BOQ & Multi-Sheet Metraj Excel Engine)
+;;;  Version: 1.8 (Bulletproof Arabic Excel Export & Engineering BOQ Engine)
 ;;;  Commands:
 ;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR        - اختصار لنفس الأداة
@@ -11,7 +11,7 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.7")
+(setq *qto-version* "1.8")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
