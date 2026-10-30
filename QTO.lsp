@@ -1,16 +1,17 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.2 (Excel Arabic Encoding & Column Separator Fix)
+;;;  Version: 1.3 (Native Excel .xlsx Export & One-Click Permanent Auto-Load)
 ;;;  Commands:
-;;;    QTO        - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
-;;;    HASR       - اختصار لنفس الأداة
-;;;    QTO-UPDATE - التحديث التلقائي للإضافة مباشرة من GitHub
+;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
+;;;    HASR        - اختصار لنفس الأداة
+;;;    QTO-INSTALL - التثبيت الدائم ليعمل تلقائياً في كل مرة يفتح فيها أوتوكاد
+;;;    QTO-UPDATE  - التحديث التلقائي للإضافة مباشرة من GitHub
 ;;; ==========================================================================
 
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.2")
+(setq *qto-version* "1.3")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -18,6 +19,46 @@
 (defun qto:numberp (x)
   (and x (or (= (type x) 'REAL) (= (type x) 'INT)))
 )
+
+;;; --------------------------------------------------------------------------
+;;; أمر التثبيت الدائم بنقرة واحدة: QTO-INSTALL
+;;; يقوم بإضافة الإضافة إلى acaddoc.lsp لتعمل تلقائياً في كل مخطط يفتحه المستخدم
+;;; --------------------------------------------------------------------------
+(defun c:QTO-INSTALL ( / local-path sup-folder acaddoc-path f clean-path)
+  (princ "\nجاري إعداد التثبيت الدائم للإضافة داخل أوتوكاد ...")
+  (setq local-path (findfile "QTO.lsp"))
+  (if (null local-path)
+    (setq local-path (getfiled "حدد مسار ملف QTO.lsp لتثبيته الدائم" "QTO.lsp" "lsp" 0))
+  )
+  (if local-path
+    (progn
+      (setq sup-folder (strcat (getvar "ROAMABLEROOTPREFIX") "Support\\"))
+      (setq acaddoc-path (strcat sup-folder "acaddoc.lsp"))
+      (setq f (open acaddoc-path "a"))
+      (if (null f)
+        (setq f (open acaddoc-path "w"))
+      )
+      (if f
+        (progn
+          (setq clean-path (vl-string-translate "\\" "/" local-path))
+          (write-line "\n;;; AutoCAD Quantity Takeoff Auto-Loader" f)
+          (write-line "(vl-load-com)" f)
+          (write-line (strcat "(if (findfile \"" clean-path "\") (load \"" clean-path "\"))") f)
+          (close f)
+          (alert (strcat "تم تثبيت الإضافة بنجاح في أوتوكاد!\n\n"
+                         "من الآن فصاعداً ستعمل الإضافة تلقائياً في كل مرة تفتح فيها أي مخطط أوتوكاد\n"
+                         "دون الحاجة لسحبها أو تحميلها يدوياً نهائياً."))
+          (princ "\n[✓] تم بنجاح ضبط التحميل التلقائي الدائم عبر ملف acaddoc.lsp.")
+        )
+        (alert "تعذر الكتابة في مجلد الدعم. يمكنك استخدام أمر APPLOAD وقسم Startup Suite بدلاً من ذلك.")
+      )
+    )
+    (alert "لم يتم تحديد مسار ملف QTO.lsp.")
+  )
+  (princ)
+)
+
+(defun c:HASR-INSTALL () (c:QTO-INSTALL))
 
 ;;; --------------------------------------------------------------------------
 ;;; دوال معالجة وفك تشفير يونيكود AutoCAD (\U+XXXX) وكتابتها كـ UTF-8 حقيقي في Excel
@@ -155,7 +196,6 @@
                     (setq f (open local-path "w"))
                     (if f
                       (progn
-                        ;; نكتب الكود كما ورد من جيت هاب
                         (write-line new-code f)
                         (close f)
                         (load local-path)
@@ -413,17 +453,118 @@
 )
 
 ;;; --------------------------------------------------------------------------
-;;; دالة تصدير النتائج إلى ملف CSV مهيأ للإكسل بترميز UTF-8 وفواصل أعمدة صحيحة
+;;; دالة التصدير المباشر إلى ملف Excel الحقيقي (.xlsx) مع التنسيق التلقائي
+;;; --------------------------------------------------------------------------
+(defun qto:export-to-excel ( / xl wbs wb ws cells cur-row dwg-name dwg-path default-xlsx filepath date-str)
+  (princ "\nجاري الاتصال ببرنامج Excel لتصدير التقرير ...")
+  (setq xl (vl-catch-all-apply 'vlax-get-or-create-object (list "Excel.Application")))
+
+  (if (or (vl-catch-all-error-p xl) (null xl))
+    (progn
+      (princ "\nتعذر فتح برنامج Excel مباشرة، سيتم إنشاء ملف CSV بدلاً من ذلك...")
+      (qto:export-to-csv)
+    )
+    (progn
+      (vla-put-Visible xl :vlax-true)
+      (setq wbs (vlax-get-property xl 'Workbooks))
+      (setq wb (vlax-invoke-method wbs 'Add))
+      (setq ws (vlax-get-property wb 'ActiveSheet))
+      (setq cells (vlax-get-property ws 'Cells))
+
+      (setq date-str (vl-catch-all-apply 'menucmd (list "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM)")))
+      (if (vl-catch-all-error-p date-str) (setq date-str "N/A"))
+
+      ;; ترويسة التقرير في الإكسل
+      (vl-catch-all-apply 'vlax-put-property (list ws 'Name "حصر الكميات"))
+      (vlax-put-property (vlax-get-property cells 'Item 1 1) 'Value2 "تقرير حصر الكميات - AutoCAD Quantity Takeoff")
+      (vlax-put-property (vlax-get-property cells 'Item 2 1) 'Value2 (strcat "المخطط: " (getvar "DWGNAME")))
+      (vlax-put-property (vlax-get-property cells 'Item 3 1) 'Value2 (strcat "التاريخ: " date-str))
+      (vlax-put-property (vlax-get-property cells 'Item 4 1) 'Value2 (strcat "الإصدار: v" *qto-version*))
+
+      ;; عناوين الأعمدة في الصف 6
+      (vlax-put-property (vlax-get-property cells 'Item 6 1) 'Value2 "النوع (Category)")
+      (vlax-put-property (vlax-get-property cells 'Item 6 2) 'Value2 "اسم الطبقة / البلوك (Layer / Block)")
+      (vlax-put-property (vlax-get-property cells 'Item 6 3) 'Value2 "الكمية (Quantity)")
+      (vlax-put-property (vlax-get-property cells 'Item 6 4) 'Value2 "الوحدة (Unit)")
+
+      (setq cur-row 7)
+
+      ;; 1. الأطوال
+      (if *qto-lengths*
+        (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 1) 'Value2 "أطوال")
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 2) 'Value2 (car item))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 3) 'Value2 (cdr item))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 4) 'Value2 "متر طولي (م.ط)")
+          (setq cur-row (1+ cur-row))
+        )
+      )
+
+      ;; 2. المساحات
+      (if *qto-areas*
+        (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 1) 'Value2 "مساحات")
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 2) 'Value2 (car item))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 3) 'Value2 (cdr item))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 4) 'Value2 "متر مربع (م²)")
+          (setq cur-row (1+ cur-row))
+        )
+      )
+
+      ;; 3. البلوكات
+      (if *qto-blocks*
+        (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 1) 'Value2 "بلوكات")
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 2) 'Value2 (strcat (caar item) " [" (cdar item) "]"))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 3) 'Value2 (cdr item))
+          (vlax-put-property (vlax-get-property cells 'Item cur-row 4) 'Value2 "عدد")
+          (setq cur-row (1+ cur-row))
+        )
+      )
+
+      ;; محاذاة وتوسيع الأعمدة تلقائياً في الإكسل
+      (vl-catch-all-apply
+        '(lambda ()
+           (vlax-invoke-method (vlax-get-property ws 'Columns) 'AutoFit)
+         )
+      )
+
+      ;; تحديد مسار الحفظ الافتراضي بصيغة .xlsx
+      (setq dwg-path (getvar "DWGPREFIX"))
+      (setq dwg-name (vl-filename-base (getvar "DWGNAME")))
+      (if (or (null dwg-path) (= dwg-path "")) (setq dwg-path "C:\\"))
+      (if (or (null dwg-name) (= dwg-name "")) (setq dwg-name "Drawing"))
+      (setq default-xlsx (strcat dwg-path dwg-name "_حصر_الكميات.xlsx"))
+
+      (setq filepath (getfiled "حفظ ملف إكسل الحقيقي (.xlsx)" default-xlsx "xlsx" 1))
+      (if filepath
+        (progn
+          ;; Format 51 = xlOpenXMLWorkbook (.xlsx)
+          (vl-catch-all-apply 'vlax-invoke-method (list wb 'SaveAs filepath 51))
+          (princ (strcat "\n[✓] تم حفظ ملف إكسل بنجاح في: " filepath))
+          (alert (strcat "تم إنشاء وحفظ ملف Excel (.xlsx) بنجاح!\nالمسار:\n" filepath))
+        )
+        (alert "تم فتح البيانات في Excel مباشرة على الشاشة.")
+      )
+
+      ;; تحرير كائنات COM
+      (vl-catch-all-apply 'vlax-release-object (list cells))
+      (vl-catch-all-apply 'vlax-release-object (list ws))
+      (vl-catch-all-apply 'vlax-release-object (list wb))
+      (vl-catch-all-apply 'vlax-release-object (list wbs))
+      (vl-catch-all-apply 'vlax-release-object (list xl))
+    )
+  )
+)
+
+;;; --------------------------------------------------------------------------
+;;; دالة تصدير النتائج البديلة إلى ملف CSV مهيأ للإكسل بترميز UTF-8 وفواصل أعمدة
 ;;; --------------------------------------------------------------------------
 (defun qto:export-to-csv ( / dwg-path dwg-name default-csv filepath f date-str)
   (setq dwg-path (getvar "DWGPREFIX"))
   (setq dwg-name (vl-filename-base (getvar "DWGNAME")))
-  (if (or (null dwg-path) (= dwg-path ""))
-    (setq dwg-path "C:\\")
-  )
-  (if (or (null dwg-name) (= dwg-name ""))
-    (setq dwg-name "Drawing")
-  )
+  (if (or (null dwg-path) (= dwg-path "")) (setq dwg-path "C:\\"))
+  (if (or (null dwg-name) (= dwg-name "")) (setq dwg-name "Drawing"))
   (setq default-csv (strcat dwg-path dwg-name "_حصر_الكميات.csv"))
 
   (setq filepath (getfiled "حفظ تقرير حصر الكميات (Excel CSV)" default-csv "csv" 1))
@@ -433,23 +574,18 @@
       (setq f (open filepath "w"))
       (if f
         (progn
-          ;; 1. كتابة علامة UTF-8 BOM
           (qto:write-utf8-bom f)
-
-          ;; 2. تحديد الفاصلة لإكسل ليقوم بتقسيم الأعمدة تلقائياً (sep=,)
           (qto:write-utf8-line "sep=," f)
 
           (setq date-str (vl-catch-all-apply 'menucmd (list "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM)")))
           (if (vl-catch-all-error-p date-str) (setq date-str "N/A"))
 
-          ;; 3. ترويسة ومعلومات المخطط
           (qto:write-utf8-line "تقرير حصر الكميات - AutoCAD Quantity Takeoff Report" f)
           (qto:write-utf8-line (strcat "\"المخطط:\",\"" (getvar "DWGNAME") "\"") f)
           (qto:write-utf8-line (strcat "\"التاريخ:\",\"" date-str "\"") f)
           (qto:write-utf8-line (strcat "\"الإصدار:\",\"v" *qto-version* "\"") f)
           (qto:write-utf8-line "" f)
 
-          ;; 4. جدول الأطوال
           (qto:write-utf8-line "--- [1] حصر الأطوال (Linear Takeoff) ---" f)
           (qto:write-utf8-line "\"النوع\",\"اسم الطبقة (Layer)\",\"الكمية الإجمالية\",\"الوحدة\"" f)
           (if *qto-lengths*
@@ -460,7 +596,6 @@
           )
           (qto:write-utf8-line "" f)
 
-          ;; 5. جدول المساحات
           (qto:write-utf8-line "--- [2] حصر المساحات (Area Takeoff) ---" f)
           (qto:write-utf8-line "\"النوع\",\"اسم الطبقة (Layer)\",\"المساحة الإجمالية\",\"الوحدة\"" f)
           (if *qto-areas*
@@ -471,7 +606,6 @@
           )
           (qto:write-utf8-line "" f)
 
-          ;; 6. جدول البلوكات
           (qto:write-utf8-line "--- [3] حصر البلوكات والعناصر (Block Counts) ---" f)
           (qto:write-utf8-line "\"النوع\",\"اسم البلوك (Block Name)\",\"الطبقة (Layer)\",\"العدد\",\"الوحدة\"" f)
           (if *qto-blocks*
@@ -506,7 +640,6 @@
           (setq mspace (vla-get-ModelSpace doc))
 
           ;; حساب عدد الصفوف المطلوبة
-          ;; ترويسة رئيسية (1) + عناوين أعمدة (1) + الأطوال + المساحات + البلوكات
           (setq num-rows (+ 2 (length *qto-lengths*) (length *qto-areas*) (length *qto-blocks*)))
           (setq num-cols 4)
 
@@ -521,10 +654,8 @@
                   (vla-put-TitleSuppressed tbl :vlax-false)
                   (vla-put-HeaderSuppressed tbl :vlax-false)
 
-                  ;; عنوان الجدول
                   (vla-SetText tbl 0 0 "جدول حصر الكميات - QUANTITY TAKEOFF")
 
-                  ;; عناوين الأعمدة
                   (vla-SetText tbl 1 0 "النوع (Category)")
                   (vla-SetText tbl 1 1 "الوصف / الطبقة (Description)")
                   (vla-SetText tbl 1 2 "الكمية (Quantity)")
@@ -585,9 +716,7 @@
   (setq choice (getkword "\nاختر نطاق الحصر [كامل المخطط(All) / تحديد عناصر بالماوس(Selection)] <كامل>: "))
 
   (if (or (= choice "All") (= choice "كامل") (null choice))
-    ;; اختيار كامل المخطط مع استبعاد الكيانات في الـ Defpoints أو الطبقات المجمدة
     (setq ss (ssget "X" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
-    ;; اختيار يدوي بالماوس
     (progn
       (princ "\nحدد العناصر المطلوب حصرها في المخطط (أو اضغط Enter لإنهاء التحديد): ")
       (setq ss (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
@@ -597,17 +726,16 @@
   (if (and ss (> (sslength ss) 0))
     (progn
       (princ (strcat "\nجاري فحص وحصر " (itoa (sslength ss)) " عنصراً ..."))
-      ;; المعالجة والحصر
       (qto:process-selection ss)
 
-      ;; 1. طباعة الملخص في الـ Command Line
+      ;; 1. طباعة الملخص في سطر الأوامر
       (qto:print-summary)
 
-      ;; 2. خيار التصدير إلى Excel / CSV
+      ;; 2. خيار التصدير إلى Excel الحقيقي (.xlsx)
       (initget "Yes No نعم لا")
-      (setq exp-opt (getkword "\nهل ترغب في تصدير تقرير الكميات إلى ملف Excel (CSV)؟ [نعم(Yes)/لا(No)] <نعم>: "))
+      (setq exp-opt (getkword "\nهل ترغب في تصدير تقرير الكميات إلى ملف Excel (.xlsx)؟ [نعم(Yes)/لا(No)] <نعم>: "))
       (if (or (= exp-opt "Yes") (= exp-opt "نعم") (null exp-opt))
-        (qto:export-to-csv)
+        (qto:export-to-excel)
       )
 
       ;; 3. خيار إدراج جدول داخل أوتوكاد
@@ -626,5 +754,7 @@
 (defun c:QTAKEOFF () (c:QTO))
 
 (princ (strcat "\n>> تم تحميل إضافة حصر الكميات بنجاح (الإصدار v" *qto-version* ")!"))
-(princ "\n>> اكتب الأمر QTO أو HASR لبدء الحصر، أو QTO-UPDATE للتحقق من التحديثات.\n")
+(princ "\n>> اكتب الأمر QTO أو HASR لبدء الحصر.")
+(princ "\n>> اكتب الأمر QTO-INSTALL للتثبيت الدائم لتعمل تلقائياً عند فتح أوتوكاد.")
+(princ "\n>> اكتب الأمر QTO-UPDATE للتحقق من التحديثات من GitHub.\n")
 (princ)
