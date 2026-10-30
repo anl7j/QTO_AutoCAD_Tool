@@ -1,6 +1,6 @@
 ;;; ==========================================================================
 ;;;  AutoCAD Quantity Takeoff (QTO) Tool - أداة حصر الكميات للمخططات الهندسية
-;;;  Version: 1.4 (Formatted Excel .xls/.xlsx Full Data Export & Auto-Load)
+;;;  Version: 1.5 (Direct Mouse Selection & Pure UTF-8 Arabic Excel Fix)
 ;;;  Commands:
 ;;;    QTO         - تشغيل حصر الكميات التفاعلي (أطوال، مساحات، بلوكات)
 ;;;    HASR        - اختصار لنفس الأداة
@@ -11,7 +11,7 @@
 (vl-load-com)
 
 ;;; رقم الإصدار الحالي
-(setq *qto-version* "1.4")
+(setq *qto-version* "1.5")
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة التحقق من أن القيمة رقم (صحيح أو عشري)
@@ -61,10 +61,19 @@
 (defun c:HASR-INSTALL () (c:QTO-INSTALL))
 
 ;;; --------------------------------------------------------------------------
-;;; دوال معالجة وفك تشفير يونيكود AutoCAD (\U+XXXX) وكتابتها كـ UTF-8 حقيقي في Excel
+;;; دوال كتابة بايتات UTF-8 صريحة لضمان ظهور النصوص العربية بدون أي تشوه
 ;;; --------------------------------------------------------------------------
 
-;; تحويل 4 خانات Hex إلى كود صحيح
+(defun qto:write-bytes (lst f)
+  (foreach b lst (write-char b f))
+)
+
+;; علامة البداية UTF-8 BOM
+(defun qto:write-utf8-bom (f)
+  (qto:write-bytes '(239 187 191) f)
+)
+
+;; تحويل 4 خانات Hex إلى عدد صحيح
 (defun qto:hex4->int (h / i val c digits pos)
   (setq digits "0123456789ABCDEF")
   (setq val 0)
@@ -81,7 +90,7 @@
   val
 )
 
-;; كتابة Code Point كـ بايتات UTF-8 حقيقية
+;; كتابة Code Point كـ بايتات UTF-8
 (defun qto:write-code-point (code f / b1 b2 b3)
   (cond
     ((< code 128)
@@ -101,8 +110,8 @@
   )
 )
 
-;; كتابة سطر كامل بترميز UTF-8 مع فك أي رموز \U+XXXX تلقائياً
-(defun qto:write-utf8-line (str f / len i hex code)
+;; كتابة نص ديناميكي وفك أي شفرة يونيكود من أوتوكاد مثل \U+0131 أو \U+062A
+(defun qto:write-utf8-escaped (str f / len i hex code)
   (setq len (strlen str))
   (setq i 1)
   (while (<= i len)
@@ -120,17 +129,29 @@
       )
     )
   )
-  ;; كتابة نهاية السطر CRLF
+)
+
+(defun qto:write-line-crlf (str f)
+  (qto:write-utf8-escaped str f)
   (write-char 13 f)
   (write-char 10 f)
 )
 
-;; كتابة علامة البداية UTF-8 BOM
-(defun qto:write-utf8-bom (file-handle)
-  (write-char 239 file-handle)
-  (write-char 187 file-handle)
-  (write-char 191 file-handle)
-)
+;;; نصوص باللغة العربية كبايتات UTF-8 نقية وثابتة
+(defun qto:txt-hdr-title (f) (qto:write-bytes '(216 170 217 130 216 177 217 138 216 177 32 216 173 216 181 216 177 32 216 167 217 132 217 131 217 133 217 138 216 167 216 170 32 45 32 65 117 116 111 67 65 68 32 81 117 97 110 116 105 116 121 32 84 97 107 101 111 102 102) f))
+(defun qto:txt-col-cat (f)   (qto:write-bytes '(216 167 217 132 217 134 217 136 216 185 32 40 67 97 116 101 103 111 114 121 41) f))
+(defun qto:txt-col-desc (f)  (qto:write-bytes '(216 167 216 179 217 133 32 216 167 217 132 216 183 216 168 217 130 216 169 32 47 32 216 167 217 132 216 168 217 132 217 136 217 131 32 40 68 101 115 99 114 105 112 116 105 111 110 41) f))
+(defun qto:txt-col-qty (f)   (qto:write-bytes '(216 167 217 132 217 131 217 133 217 138 216 169 32 40 81 117 97 110 116 105 116 121 41) f))
+(defun qto:txt-col-unit (f)  (qto:write-bytes '(216 167 217 132 217 136 216 173 216 175 216 169 32 40 85 110 105 116 41) f))
+(defun qto:txt-sec-len (f)   (qto:write-bytes '(45 45 45 32 91 49 93 32 216 173 216 181 216 177 32 216 167 217 132 216 163 216 183 217 136 216 167 217 132 32 40 76 105 110 101 97 114 32 84 97 107 101 111 102 102 41 32 45 45 45) f))
+(defun qto:txt-sec-area (f)  (qto:write-bytes '(45 45 45 32 91 50 93 32 216 173 216 181 216 177 32 216 167 217 132 217 133 216 179 216 167 216 173 216 167 216 170 32 40 65 114 101 97 32 84 97 107 101 111 102 102 41 32 45 45 45) f))
+(defun qto:txt-sec-blk (f)   (qto:write-bytes '(45 45 45 32 91 51 93 32 216 173 216 181 216 177 32 216 167 217 132 216 168 217 132 217 136 217 131 216 167 216 170 32 217 136 216 167 217 132 216 185 217 134 216 167 216 181 216 177 32 40 66 108 111 99 107 32 67 111 117 110 116 115 41 32 45 45 45) f))
+(defun qto:txt-cat-len (f)   (qto:write-bytes '(216 163 216 183 217 136 216 167 217 132 32 40 76 101 110 103 116 104 41) f))
+(defun qto:txt-cat-area (f)  (qto:write-bytes '(217 133 216 179 216 167 216 173 216 167 216 170 32 40 65 114 101 97 41) f))
+(defun qto:txt-cat-blk (f)   (qto:write-bytes '(216 168 217 132 217 136 217 131 216 167 216 170 32 40 66 108 111 99 107 41) f))
+(defun qto:txt-unit-m (f)    (qto:write-bytes '(217 133 216 170 216 177 32 216 183 217 136 217 132 217 138 32 40 109 41) f))
+(defun qto:txt-unit-m2 (f)   (qto:write-bytes '(217 133 216 170 216 177 32 217 133 216 177 216 168 216 185 32 40 109 194 178 41) f))
+(defun qto:txt-unit-pcs (f)  (qto:write-bytes '(216 185 216 175 216 175 32 40 112 99 115 41) f))
 
 ;;; --------------------------------------------------------------------------
 ;;; دالة جلب محتوى رابط عبر الإنترنت (HTTP GET) لدعم التحديث التلقائي
@@ -296,15 +317,14 @@
 ;;; --------------------------------------------------------------------------
 (defun qto:process-selection (ss / i total-count ent vla-obj obj-name layer-name
                                   blk-name h-area c-area len-val p-area c-len)
-  (setq *qto-lengths* nil)   ; قائمة الأطوال حسب الطبقة: '((layer . total_length) ...)
-  (setq *qto-areas* nil)     ; قائمة المساحات حسب الطبقة: '((layer . total_area) ...)
-  (setq *qto-blocks* nil)    ; قائمة أعداد البلوكات: '(((block_name . layer) . count) ...)
+  (setq *qto-lengths* nil)
+  (setq *qto-areas* nil)
+  (setq *qto-blocks* nil)
 
   (setq i 0)
   (setq total-count (sslength ss))
 
   (while (< i total-count)
-    ;; إظهار تقدم الحصر في المخططات الكبيرة
     (if (and (> total-count 1000) (= (rem i 1000) 0) (> i 0))
       (princ (strcat "\n... تم فحص " (itoa i) " من " (itoa total-count) " عنصراً"))
     )
@@ -322,7 +342,6 @@
           ;; 1. حصر البلوكات (Block References)
           ((or (= obj-name "AcDbBlockReference") (= obj-name "AcDbMInsertBlock"))
            (setq blk-name (qto:get-block-name vla-obj))
-           ;; استبعاد البلوكات الخاصة بالنظام إذا بدأت بـ *
            (if (not (wcmatch blk-name "`**"))
              (setq *qto-blocks* (qto:accumulate (cons blk-name layer-name) 1 *qto-blocks*))
            )
@@ -357,7 +376,6 @@
            (if (and (qto:numberp len-val) (> len-val 0.0))
              (setq *qto-lengths* (qto:accumulate layer-name len-val *qto-lengths*))
            )
-           ;; إذا كان بولي لاين مغلق نحسب مساحته أيضاً
            (if (qto:is-closed-curve vla-obj)
              (progn
                (setq p-area (vl-catch-all-apply 'vla-get-Area (list vla-obj)))
@@ -453,7 +471,7 @@
 )
 
 ;;; --------------------------------------------------------------------------
-;;; دالة التصدير المباشر لملف Excel منسق بالكامل (.xls / .xlsx) مع كافة البيانات
+;;; دالة التصدير المباشر لملف Excel احترافي مع دعم كامل للغة العربية 100%
 ;;; --------------------------------------------------------------------------
 (defun qto:export-to-excel ( / dwg-path dwg-name default-xls default-xlsx filepath f date-str xl wb)
   (setq dwg-path (getvar "DWGPREFIX"))
@@ -468,50 +486,72 @@
       (setq f (open filepath "w"))
       (if f
         (progn
+          ;; 1. كتابة UTF-8 BOM
           (qto:write-utf8-bom f)
+
           (setq date-str (vl-catch-all-apply 'menucmd (list "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM)")))
           (if (vl-catch-all-error-p date-str) (setq date-str "N/A"))
 
-          ;; 1. ترويسة ملف Excel مع إعدادات الاتجاه من اليمين لليسار RTL
-          (qto:write-utf8-line "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">" f)
-          (qto:write-utf8-line "<head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">" f)
-          (qto:write-utf8-line "<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>" f)
-          (qto:write-utf8-line "<x:Name>حصر الكميات</x:Name><x:WorksheetOptions><x:DisplayRightToLeft/><x:Selected/></x:WorksheetOptions>" f)
-          (qto:write-utf8-line "</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->" f)
-          (qto:write-utf8-line "<style>" f)
-          (qto:write-utf8-line "body { font-family: Segoe UI, Tahoma, Arial, sans-serif; direction: rtl; }" f)
-          (qto:write-utf8-line "table { border-collapse: collapse; width: 100%; margin-top: 15px; }" f)
-          (qto:write-utf8-line "th { background-color: #107C41; color: #ffffff; font-weight: bold; font-size: 11pt; padding: 10px; border: 1px solid #0D6535; text-align: center; }" f)
-          (qto:write-utf8-line "td { padding: 8px 12px; border: 1px solid #d4d4d4; font-size: 10pt; text-align: right; }" f)
-          (qto:write-utf8-line ".center { text-align: center; font-weight: bold; }" f)
-          (qto:write-utf8-line ".sec { background-color: #E8F5E9; color: #1B5E20; font-weight: bold; font-size: 11pt; padding: 8px; border: 1px solid #C8E6C9; }" f)
-          (qto:write-utf8-line ".title { font-size: 16pt; font-weight: bold; color: #107C41; padding: 5px 0; }" f)
-          (qto:write-utf8-line ".info { font-size: 10.5pt; color: #444444; }" f)
-          (qto:write-utf8-line "</style></head><body>" f)
+          ;; 2. كتابة ترويسة HTML Excel مع اتجاه اليمين لليسار RTL وتنسيق أنيق
+          (qto:write-line-crlf "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">" f)
+          (qto:write-line-crlf "<head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">" f)
+          (qto:write-line-crlf "<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>" f)
+          (qto:write-line-crlf "<x:Name>QTO</x:Name><x:WorksheetOptions><x:DisplayRightToLeft/><x:Selected/></x:WorksheetOptions>" f)
+          (qto:write-line-crlf "</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->" f)
+          (qto:write-line-crlf "<style>" f)
+          (qto:write-line-crlf "body { font-family: Segoe UI, Tahoma, Arial, sans-serif; direction: rtl; }" f)
+          (qto:write-line-crlf "table { border-collapse: collapse; width: 100%; margin-top: 15px; }" f)
+          (qto:write-line-crlf "th { background-color: #107C41; color: #ffffff; font-weight: bold; font-size: 11pt; padding: 10px; border: 1px solid #0D6535; text-align: center; }" f)
+          (qto:write-line-crlf "td { padding: 8px 12px; border: 1px solid #d4d4d4; font-size: 10pt; text-align: right; }" f)
+          (qto:write-line-crlf ".center { text-align: center; font-weight: bold; }" f)
+          (qto:write-line-crlf ".sec { background-color: #E8F5E9; color: #1B5E20; font-weight: bold; font-size: 11pt; padding: 8px; border: 1px solid #C8E6C9; }" f)
+          (qto:write-line-crlf ".title { font-size: 16pt; font-weight: bold; color: #107C41; padding: 5px 0; }" f)
+          (qto:write-line-crlf ".info { font-size: 10.5pt; color: #444444; }" f)
+          (qto:write-line-crlf "</style></head><body>" f)
 
-          (qto:write-utf8-line "<div class=\"title\">تقرير حصر الكميات - AutoCAD Quantity Takeoff</div>" f)
-          (qto:write-utf8-line (strcat "<div class=\"info\"><strong>المخطط:</strong> " (getvar "DWGNAME") "</div>") f)
-          (qto:write-utf8-line (strcat "<div class=\"info\"><strong>التاريخ:</strong> " date-str "</div>") f)
-          (qto:write-utf8-line (strcat "<div class=\"info\"><strong>الإصدار:</strong> v" *qto-version* "</div>") f)
+          ;; العنوان والمعلومات
+          (qto:write-utf8-escaped "<div class=\"title\">" f)
+          (qto:txt-hdr-title f)
+          (qto:write-line-crlf "</div>" f)
 
-          (qto:write-utf8-line "<table>" f)
-          (qto:write-utf8-line "<thead><tr>" f)
-          (qto:write-utf8-line "<th style=\"width:15%;\">النوع (Category)</th>" f)
-          (qto:write-utf8-line "<th style=\"width:45%;\">اسم الطبقة / البلوك (Description)</th>" f)
-          (qto:write-utf8-line "<th style=\"width:20%;\">الكمية (Quantity)</th>" f)
-          (qto:write-utf8-line "<th style=\"width:20%;\">الوحدة (Unit)</th>" f)
-          (qto:write-utf8-line "</tr></thead><tbody>" f)
+          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Drawing:</strong> " (getvar "DWGNAME") "</div>") f)
+          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Date:</strong> " date-str "</div>") f)
+          (qto:write-line-crlf (strcat "<div class=\"info\"><strong>Version:</strong> v" *qto-version* "</div>") f)
+
+          ;; بداية الجدول وعناوين الأعمدة
+          (qto:write-line-crlf "<table><thead><tr>" f)
+          (qto:write-utf8-escaped "<th style=\"width:15%;\">" f)
+          (qto:txt-col-cat f)
+          (qto:write-line-crlf "</th>" f)
+
+          (qto:write-utf8-escaped "<th style=\"width:45%;\">" f)
+          (qto:txt-col-desc f)
+          (qto:write-line-crlf "</th>" f)
+
+          (qto:write-utf8-escaped "<th style=\"width:20%;\">" f)
+          (qto:txt-col-qty f)
+          (qto:write-line-crlf "</th>" f)
+
+          (qto:write-utf8-escaped "<th style=\"width:20%;\">" f)
+          (qto:txt-col-unit f)
+          (qto:write-line-crlf "</th></tr></thead><tbody>" f)
 
           ;; 1. الأطوال
           (if *qto-lengths*
             (progn
-              (qto:write-utf8-line "<tr><td colspan=\"4\" class=\"sec\">--- [1] حصر الأطوال (Linear Takeoff) ---</td></tr>" f)
+              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
+              (qto:txt-sec-len f)
+              (qto:write-line-crlf "</td></tr>" f)
               (foreach item (vl-sort *qto-lengths* '(lambda (a b) (< (car a) (car b))))
-                (qto:write-utf8-line
-                  (strcat "<tr><td>أطوال</td><td>" (car item) "</td><td class=\"center\">"
-                          (rtos (cdr item) 2 3) "</td><td>متر طولي (م.ط)</td></tr>")
-                  f
-                )
+                (qto:write-utf8-escaped "<tr><td>" f)
+                (qto:txt-cat-len f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:write-utf8-escaped (car item) f)
+                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
+                (qto:write-utf8-escaped (rtos (cdr item) 2 3) f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:txt-unit-m f)
+                (qto:write-line-crlf "</td></tr>" f)
               )
             )
           )
@@ -519,13 +559,19 @@
           ;; 2. المساحات
           (if *qto-areas*
             (progn
-              (qto:write-utf8-line "<tr><td colspan=\"4\" class=\"sec\">--- [2] حصر المساحات (Area Takeoff) ---</td></tr>" f)
+              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
+              (qto:txt-sec-area f)
+              (qto:write-line-crlf "</td></tr>" f)
               (foreach item (vl-sort *qto-areas* '(lambda (a b) (< (car a) (car b))))
-                (qto:write-utf8-line
-                  (strcat "<tr><td>مساحات</td><td>" (car item) "</td><td class=\"center\">"
-                          (rtos (cdr item) 2 3) "</td><td>متر مربع (م²)</td></tr>")
-                  f
-                )
+                (qto:write-utf8-escaped "<tr><td>" f)
+                (qto:txt-cat-area f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:write-utf8-escaped (car item) f)
+                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
+                (qto:write-utf8-escaped (rtos (cdr item) 2 3) f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:txt-unit-m2 f)
+                (qto:write-line-crlf "</td></tr>" f)
               )
             )
           )
@@ -533,23 +579,29 @@
           ;; 3. البلوكات
           (if *qto-blocks*
             (progn
-              (qto:write-utf8-line "<tr><td colspan=\"4\" class=\"sec\">--- [3] حصر البلوكات والعناصر (Block Counts) ---</td></tr>" f)
+              (qto:write-utf8-escaped "<tr><td colspan=\"4\" class=\"sec\">" f)
+              (qto:txt-sec-blk f)
+              (qto:write-line-crlf "</td></tr>" f)
               (foreach item (vl-sort *qto-blocks* '(lambda (a b) (< (caar a) (caar b))))
-                (qto:write-utf8-line
-                  (strcat "<tr><td>بلوكات</td><td>" (caar item) " [" (cdar item) "]</td><td class=\"center\">"
-                          (itoa (fix (cdr item))) "</td><td>عدد</td></tr>")
-                  f
-                )
+                (qto:write-utf8-escaped "<tr><td>" f)
+                (qto:txt-cat-blk f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:write-utf8-escaped (strcat (caar item) " [" (cdar item) "]") f)
+                (qto:write-utf8-escaped "</td><td class=\"center\">" f)
+                (qto:write-utf8-escaped (itoa (fix (cdr item))) f)
+                (qto:write-utf8-escaped "</td><td>" f)
+                (qto:txt-unit-pcs f)
+                (qto:write-line-crlf "</td></tr>" f)
               )
             )
           )
 
-          (qto:write-utf8-line "</tbody></table></body></html>" f)
+          (qto:write-line-crlf "</tbody></table></body></html>" f)
           (close f)
 
           (princ (strcat "\n[✓] تم إنشاء وتصدير ملف Excel بنجاح: " filepath))
 
-          ;; فتح الملف مباشرة في Excel وتحويل نسخة منه لـ .xlsx
+          ;; تشغيل Excel وفتح الملف أمامه مباشرة
           (setq xl (vl-catch-all-apply 'vlax-get-or-create-object (list "Excel.Application")))
           (if (and xl (not (vl-catch-all-error-p xl)))
             (progn
@@ -567,7 +619,7 @@
 
           (alert (strcat "تم بنجاح تصدير تقرير الكميات إلى Excel!\n\n"
                          "المسار:\n" filepath "\n\n"
-                         "تم فتح الملف في Excel وهو جاهز ومنسق بالكامل مع كافة البيانات."))
+                         "تم فتح الملف في Excel وهو جاهز ومنسق بالكامل."))
         )
         (alert "تعذر فتح الملف للكتابة!")
       )
@@ -589,7 +641,6 @@
           (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
           (setq mspace (vla-get-ModelSpace doc))
 
-          ;; حساب عدد الصفوف المطلوبة
           (setq num-rows (+ 2 (length *qto-lengths*) (length *qto-areas*) (length *qto-blocks*)))
           (setq num-cols 4)
 
@@ -655,22 +706,24 @@
 
 ;;; --------------------------------------------------------------------------
 ;;; الأمر الأساسي: QTO (أو HASR)
+;;; يدعم الآن التحديد التفاعلي بالماوس مباشرة كما في أوامر أوتوكاد الأصلية!
 ;;; --------------------------------------------------------------------------
-(defun c:QTO ( / choice ss exp-opt)
+(defun c:QTO ( / ss exp-opt)
   (setvar "CMDECHO" 0)
   (princ "\n=======================================================")
   (princ (strcat "\n  أداة حصر الكميات لأوتوكاد (v" *qto-version* ") "))
   (princ "\n=======================================================")
 
-  (initget "All Selection كامل تحديد")
-  (setq choice (getkword "\nاختر نطاق الحصر [كامل المخطط(All) / تحديد عناصر بالماوس(Selection)] <كامل>: "))
+  ;; التحديد التفاعلي المباشر بالماوس
+  (princ "\nحدد العناصر أو الغرفة بالماوس لحصرها، أو اضغط [Enter] لحصر كامل المخطط: ")
+  (setq ss (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
 
-  (if (or (= choice "All") (= choice "كامل") (null choice))
-    (setq ss (ssget "X" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+  (if (null ss)
     (progn
-      (princ "\nحدد العناصر المطلوب حصرها في المخطط (أو اضغط Enter لإنهاء التحديد): ")
-      (setq ss (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
+      (princ "\nلم تقم بتحديد عناصر، جاري حصر كامل المخطط أوتوماتيكياً ...")
+      (setq ss (ssget "X" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,CIRCLE,HATCH,REGION,INSERT"))))
     )
+    (princ (strcat "\nتم تحديد " (itoa (sslength ss)) " عنصراً للحصر."))
   )
 
   (if (and ss (> (sslength ss) 0))
@@ -691,7 +744,7 @@
       ;; 3. خيار إدراج جدول داخل أوتوكاد
       (qto:insert-autocad-table)
     )
-    (princ "\nلم يتم تحديد أي عناصر قابلة للحصر!")
+    (princ "\nلم يتم العثور على أي عناصر قابلة للحصر!")
   )
 
   (setvar "CMDECHO" 1)
